@@ -51,6 +51,15 @@ function gapAt(a, lean) {
   return best;
 }
 
+/* 画面の外（見せない人やスマホを置く場所） */
+const OFFSTAGE = 10;
+
+/* 取っ組み合いのときの二人の座り位置（自分は右、後ろの人は左） */
+const SCUFFLE = {
+  me: { hip: { x: 0.1, y: 0.48 }, sh: { x: 0.08, y: 0.83 }, head: { x: 0.06, y: 1.09 }, knee: { x: 0.37, y: 0.27 }, foot: { x: 0.43, y: 0.06 } },
+  him: { hip: { x: -0.63, y: 0.48 }, sh: { x: -0.62, y: 0.83 }, head: { x: -0.65, y: 1.09 }, knee: { x: -0.27, y: 0.27 }, foot: { x: -0.22, y: 0.06 } }
+};
+
 export class Scene3D {
   constructor() {
     var self = this;
@@ -96,6 +105,7 @@ export class Scene3D {
     /* 人 */
     this.me = this.person({ coat: "#3a6fb8", pants: "#2e3442", skin: "#f1c7a1", cap: "#d8412f", hand: "#f1c7a1" });
     this.him = this.person({ coat: "#5d7a4a", pants: "#3a3530", skin: "#eab993", hair: "#2a2420", hand: "#eab993" });
+    this.police = this.person({ coat: "#263d68", pants: "#202b40", skin: "#e9bd9a", cap: "#172b4b", hand: "#e9bd9a" });
     /* スマホ */
     this.phone = this.part(sc, "box", "#1d1f24", 0, 0, 0, 0.075, 0.008, 0.14);
     this.phoneScreen = this.part(sc, "box", "#9fd8ff", 0, 0, 0, 0.06, 0.002, 0.12, { emissive: "#6fb8ef", emissiveIntensity: 0.6 });
@@ -180,14 +190,15 @@ export class Scene3D {
     }
     return p;
   }
-  /* 座った姿勢。hip, sh（肩）, head（頭の中心）, nd（鼻の向き）, knee, foot, elbow, hand（いずれも x, y）、z は体の奥行き */
+  /* 座った姿勢。hip, sh（肩）, head（頭の中心）, nd（鼻の向き＝上下の傾き）, knee, foot, elbow, hand（いずれも x, y）、z は体の奥行き。
+     dir は顔と足先の向き（1＝右(+x)、-1＝左(-x)。省略は右）。体は左右対称なので、頭と足先だけ向きを変える */
   pose(p, q) {
-    var z = 0.12;
+    var z = 0.12, dir = q.dir < 0 ? -1 : 1;
     function P(a, dz) { return { x: a.x, y: a.y, z: dz == null ? z : dz }; }
     this.segment(p.thigh, P(q.hip), P(q.knee));
     this.segment(p.shin, P(q.knee), P(q.foot));
     p.knee.position.set(q.knee.x, q.knee.y, z);
-    p.foot.position.set(q.foot.x + 0.06, q.foot.y, z);
+    p.foot.position.set(q.foot.x + 0.06 * dir, q.foot.y, z);
     p.hips.position.set(q.hip.x, q.hip.y, 0);
     var mid = { x: (q.hip.x + q.sh.x) / 2, y: (q.hip.y + q.sh.y) / 2 };
     p.torso.position.set(mid.x, mid.y + 0.04, 0);
@@ -197,62 +208,118 @@ export class Scene3D {
     p.elbow.position.set(q.elbow.x, q.elbow.y, 0.18);
     p.hand.position.set(q.hand.x, q.hand.y, 0.14);
     p.head.position.set(q.head.x, q.head.y, 0);
-    p.head.rotation.z = q.nd;
+    /* 先に nd だけ傾けてから、向きを反転する（Y 軸まわりに 180°） */
+    p.head.rotation.set(0, dir < 0 ? Math.PI : 0, q.nd);
     /* 首：肩の上から頭の下まで */
     var ux = q.sh.x - q.hip.x, uy = q.sh.y - q.hip.y, ul = Math.sqrt(ux * ux + uy * uy) || 1;
     this.segment(p.neck, { x: q.sh.x - ux / ul * 0.05, y: q.sh.y - uy / ul * 0.05, z: 0 }, { x: q.head.x, y: q.head.y - 0.05, z: 0 });
     p.q = q;
   }
-  /* 状態を写す。s: { t, angle（ラジアン）, lean, near（0〜1 近さ）, angry（0〜1）, mag } */
+  /* 状態を写す。s: { t, angle（ラジアン）, lean, near（0〜1 近さ）, angry（0〜1）, rag, fight, fightTime, police（0〜1）, policeTime, W, H } */
   sync(s) {
-    var dt = Math.max(0, Math.min(0.1, s.t - this.t)); this.t = s.t;
+    const dt = Math.max(0, Math.min(0.1, s.t - this.t));
+    this.t = s.t;
     this.sceneryTex.offset.x = (this.sceneryTex.offset.x + dt * 0.35) % 1;
-    var a = s.angle;
-    this.myBack.rotation.z = a;
+    this.myBack.rotation.z = s.angle;
 
-    /* 自分：背もたれにもたれる */
-    var pv = pivot(0), c = Math.cos(a), sn = Math.sin(a);
-    function onBack(u, v) { return { x: pv.x + u * c - v * sn, y: pv.y + u * sn + v * c }; }
-    var hip = onBack(0.14, 0.1), sh = onBack(0.16, 0.56), head = onBack(0.2, 0.8);
-    var knee = { x: hip.x + 0.42, y: SEAT_Y + 0.08 }, foot = { x: knee.x + 0.05, y: 0.05 };
+    const scuffle = !!(s.fight || s.police);
+    if (scuffle) this.poseFight(s);
+    else this.poseMe(s.angle);
+
+    if (s.rag && !this.rag) this.ragStart();
+    if (!s.rag && this.rag) this.ragReset();
+
+    if (this.rag) this.stepRag(dt);
+    else if (scuffle) this.poseArrest(s);
+    else this.poseSeated(s);
+
+    this.fitCamera(s);
+  }
+  /* 自分：背もたれにもたれる */
+  poseMe(a) {
+    const pv = pivot(0), c = Math.cos(a), sn = Math.sin(a);
+    const onBack = (u, v) => ({ x: pv.x + u * c - v * sn, y: pv.y + u * sn + v * c });
+    const hip = onBack(0.14, 0.1), sh = onBack(0.16, 0.56), head = onBack(0.2, 0.8);
+    const knee = { x: hip.x + 0.42, y: SEAT_Y + 0.08 }, foot = { x: knee.x + 0.05, y: 0.05 };
     this.pose(this.me, {
       hip: hip, sh: sh, head: head, nd: a * 0.6, knee: knee, foot: foot,
       elbow: { x: sh.x + 0.05, y: SEAT_Y + 0.24 }, hand: { x: knee.x - 0.1, y: SEAT_Y + 0.14 }
     });
-
-    if (s.rag && !this.rag) this.ragStart();
-    if (!s.rag && this.rag) this.ragReset();
-    if (this.rag) {
-      this.rag.world.step(1 / 60, dt, 4);
-      this.rag.parts.forEach(function (o) {
-        o.g.position.set(o.b.position.x, o.b.position.y, o.b.position.z);
-        o.g.quaternion.set(o.b.quaternion.x, o.b.quaternion.y, o.b.quaternion.z, o.b.quaternion.w);
-      });
-      var R = this.rag, na = R.torso.pointToWorldFrame(R.nkA), hp = R.head.position;
-      this.segment(this.him.neck, { x: na.x, y: na.y, z: na.z }, { x: hp.x, y: hp.y, z: hp.z });
-      this.him.faceMat.emissiveIntensity = 0.8;
-    } else {
-      /* 後ろの人：ふつうに座ってスマホ。近いと頭がふるえて顔が赤くなる */
-      /* 頭は当たりの形と同じ場所・向きに置く（ずらさない） */
-      var b = backHead(s.lean), back = 0;
-      var bh = { x: b.head.x, y: b.head.y };
-      /* 前の座席が近いので、ひざは低めに手前で止め、手も体に寄せる（倒れてきた背もたれに食い込まない） */
-      var bknee = { x: b.hip.x + 0.36, y: SEAT_Y + 0.07 }, bfoot = { x: bknee.x + 0.02, y: 0.05 };
-      var hand = { x: b.hip.x + 0.22, y: b.hip.y + 0.2 };
-      this.pose(this.him, {
-        hip: b.hip, sh: { x: b.sh.x - back * 0.6, y: b.sh.y }, head: bh, nd: b.nd,
-        knee: bknee, foot: bfoot, elbow: { x: b.sh.x + 0.04, y: b.sh.y - 0.27 }, hand: hand
-      });
-      this.him.faceMat.emissiveIntensity = Math.max(s.angry * 0.8, Math.max(0, s.near - 0.5) * 0.6);
-      this.phone.position.set(hand.x + 0.02, hand.y + 0.03, 0.08);
-      this.phone.rotation.set(0, 0, 0.5);
-      this.phoneScreen.position.set(hand.x + 0.016, hand.y + 0.042, 0.08);
-      this.phoneScreen.rotation.set(0, 0, 0.5);
+  }
+  /* 取っ組み合い：自分は後ろを向いて（dir -1）、後ろの人は自分のほうを向く */
+  poseFight(s) {
+    const swing = Math.sin((s.fightTime || 0) * 9) * 0.12, hit = Math.abs(swing);
+    this.pose(this.me, Object.assign({}, SCUFFLE.me, {
+      nd: -0.25, dir: -1,
+      elbow: { x: -0.02, y: 0.75 }, hand: { x: -0.15 + swing, y: 0.86 + hit }
+    }));
+    this.pose(this.him, Object.assign({}, SCUFFLE.him, {
+      nd: 0.2,
+      elbow: { x: -0.50, y: 0.75 }, hand: { x: -0.37 - swing, y: 0.86 + hit }
+    }));
+    this.him.faceMat.emissiveIntensity = s.fight ? 0.65 : 0.15;
+  }
+  /* 警察が右から歩いてきて、二人の間に入る（左向き）。入ったら二人は落ち着く */
+  poseArrest(s) {
+    this.phone.position.set(OFFSTAGE, 0, 0);
+    this.phoneScreen.position.set(OFFSTAGE, 0, 0);
+    const pp = s.police || 0, px = 0.62 - 0.68 * pp;
+    const stride = pp < 0.72 ? Math.sin((s.policeTime || 0) * 10) * 0.07 : 0;
+    const arms = pp > 0.62;
+    this.policeParked = false;
+    this.pose(this.police, {
+      hip: { x: px, y: 0.45 }, sh: { x: px, y: 0.85 }, head: { x: px, y: 1.12 }, nd: 0, dir: -1,
+      knee: { x: px + 0.02 + stride, y: 0.24 }, foot: { x: px + 0.06 - stride, y: 0.05 },
+      elbow: { x: px - (arms ? 0.12 : 0.08), y: arms ? 0.77 : 0.63 },
+      hand: { x: px - (arms ? 0.28 : 0.1), y: arms ? 0.82 : 0.48 }
+    });
+    if (s.police) {
+      this.pose(this.me, Object.assign({}, SCUFFLE.me, {
+        nd: -0.15, dir: -1,
+        elbow: { x: 0.02, y: 0.86 }, hand: { x: -0.06, y: 0.98 }
+      }));
+      this.pose(this.him, Object.assign({}, SCUFFLE.him, {
+        nd: 0.15,
+        elbow: { x: -0.56, y: 0.86 }, hand: { x: -0.48, y: 0.98 }
+      }));
     }
-
-    /* カメラ：真横から遠近なし（見た目と当たりを一致させる）。横1.75mを写し、縦長の画面では上下が広がる */
-    var vw = 1.75, vh = vw * s.H / s.W, cx = -0.4, cy = 0.95;
-    var cam = this.camera;
+  }
+  /* 後ろの人：ふつうに座ってスマホ。近いと頭がふるえて顔が赤くなる */
+  poseSeated(s) {
+    if (!this.policeParked) {
+      this.policeParked = true;
+      this.pose(this.police, { hip: { x: OFFSTAGE, y: 0 }, sh: { x: OFFSTAGE, y: 0.4 }, head: { x: OFFSTAGE, y: 0.7 }, nd: 0, knee: { x: OFFSTAGE, y: 0 }, foot: { x: OFFSTAGE, y: 0 }, elbow: { x: OFFSTAGE, y: 0.3 }, hand: { x: OFFSTAGE, y: 0.2 } });
+    }
+    /* 頭は当たりの形と同じ場所・向きに置く（ずらさない） */
+    const b = backHead(s.lean);
+    /* 前の座席が近いので、ひざは低めに手前で止め、手も体に寄せる（倒れてきた背もたれに食い込まない） */
+    const knee = { x: b.hip.x + 0.36, y: SEAT_Y + 0.07 }, foot = { x: knee.x + 0.02, y: 0.05 };
+    const hand = { x: b.hip.x + 0.22, y: b.hip.y + 0.2 };
+    this.pose(this.him, {
+      hip: b.hip, sh: b.sh, head: { x: b.head.x, y: b.head.y }, nd: b.nd,
+      knee: knee, foot: foot, elbow: { x: b.sh.x + 0.04, y: b.sh.y - 0.27 }, hand: hand
+    });
+    this.him.faceMat.emissiveIntensity = Math.max(s.angry * 0.8, Math.max(0, s.near - 0.5) * 0.6);
+    this.phone.position.set(hand.x + 0.02, hand.y + 0.03, 0.08);
+    this.phone.rotation.set(0, 0, 0.5);
+    this.phoneScreen.position.set(hand.x + 0.016, hand.y + 0.042, 0.08);
+    this.phoneScreen.rotation.set(0, 0, 0.5);
+  }
+  /* ラグドールを進めて、体の部品に写す */
+  stepRag(dt) {
+    const R = this.rag;
+    R.world.step(1 / 60, dt, 4);
+    R.parts.forEach((o) => {
+      o.g.position.set(o.b.position.x, o.b.position.y, o.b.position.z);
+      o.g.quaternion.set(o.b.quaternion.x, o.b.quaternion.y, o.b.quaternion.z, o.b.quaternion.w);
+    });
+    const na = R.torso.pointToWorldFrame(R.nkA), hp = R.head.position;
+    this.segment(this.him.neck, { x: na.x, y: na.y, z: na.z }, { x: hp.x, y: hp.y, z: hp.z });
+    this.him.faceMat.emissiveIntensity = 0.8;
+  }
+  /* カメラ：真横から遠近なし（見た目と当たりを一致させる）。横1.75mを写し、縦長の画面では上下が広がる */
+  fitCamera(s) {
+    const vw = 1.75, vh = vw * s.H / s.W, cx = -0.4, cy = 0.95, cam = this.camera;
     cam.left = -vw / 2; cam.right = vw / 2; cam.top = vh / 2; cam.bottom = -vh / 2;
     cam.updateProjectionMatrix();
     cam.position.set(cx, cy, 6);

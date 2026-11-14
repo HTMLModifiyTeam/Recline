@@ -11,7 +11,8 @@ var canvas = document.getElementById("c");
 var ctx = canvas.getContext("2d");
 var wrap = document.getElementById("wrap");
 var W = 540, H = 960;
-var keyMode = false;
+
+const rngChance = (probability = 0.5) => Math.random() < probability;
 
 function layout() {
   var view = gameView.measure(wrap, W);
@@ -48,16 +49,20 @@ var S = {
   ASK: "ask",
   PLAY: "play",
   ANGRY: "angry",
+  FIGHT: "fight",
+  POLICE: "police",
   RESULT: "result"
 };
 var state, score, T, held;
 var MAX = 50; /* 座席が倒れきる角度 */
 var SPEED = 8; /* 倒れる速さ（度/秒） */
 var D2R = Math.PI / 180;
-var angle, contact, lean, gap, hitInfo, failed, denied, creakT = 0,
-  noUI = false;
+var angle, contact, lean, gap, hitInfo, creakT = 0;
+var noUI = false;
+var failed, denied;
+var isFight = false;
 
-function newRound(forceDeny) {
+function newRound() {
   document.getElementById("start").hidden = true;
   state = S.ASK;
   score = 0;
@@ -78,10 +83,13 @@ function newRound(forceDeny) {
     zh: "可以把椅背放倒吗？",
     tw: "可以把椅背放倒嗎？"
   });
-  /* 30回に1回くらい、断られて終わり */
-  denied = forceDeny || Math.random() < 1 / 30;
-  if (denied) say("back", "だめです", "ダメです", "No.", { pitch: 200, delay: 1.7, mora: 0.15, ko: "안 돼요.", zh: "不行。", tw: "不行。" });
-  else say("back", "どうぞ", "どうぞ", "Sure.", { pitch: 210, delay: 1.7, mora: 0.15, ko: "그러세요.", zh: "请便。", tw: "請便。" });
+  /* 30回に1回くらい断られ、けんかのあと警察が来る */
+  denied = rngChance(1 / 30);
+  if (denied) {
+    isFight = rngChance(.4);
+    if (isFight) say("back", "やるか？", "やるか？", "WANNA FIGHT?", { pitch: 100, delay: 1.7, mora: 0.15, ko: "싸울래?", zh: "想打架吗？", tw: "想打架嗎？" });
+    else say("back", "だめです", "ダメです", "No.", { pitch: 200, delay: 1.7, mora: 0.15, ko: "안 돼요.", zh: "不行。", tw: "不行。" });
+  } else say("back", "どうぞ", "どうぞ", "Sure.", { pitch: 210, delay: 1.7, mora: 0.15, ko: "그러세요.", zh: "请便。", tw: "請便。" });
 }
 /* 背もたれの頭の部分と後ろの人の頭のすき間（メートル）。a は度 */
 function gapNow(a) {
@@ -99,9 +107,26 @@ function update(dt) {
   gap = gapNow(angle);
   if (state === S.ASK) {
     if (denied ? T > 3.2 : T > 2.4) {
-      if (denied) toResult();
-      else state = S.PLAY;
+      if (denied) {
+        if (isFight) {
+          state = S.FIGHT;
+          T2 = 0;
+        } else toResult();
+      } else state = S.PLAY;
     }
+    return;
+  }
+  if (state === S.FIGHT) {
+    T2 += dt;
+    if (T2 > 2) {
+      state = S.POLICE;
+      T2 = 0;
+    }
+    return;
+  }
+  if (state === S.POLICE) {
+    T2 += dt;
+    if (T2 > 2.5) toResult();
     return;
   }
   if (state === S.ANGRY) {
@@ -162,15 +187,12 @@ function up() {
     bump();
     return;
   }
-  {
-    toResult();
-    sfx.noiseHit(0.08, 600, 0.3, 2);
-    sfx.fanfare();
-  }
+  toResult();
+  sfx.noiseHit(0.08, 600, 0.3, 2);
+  sfx.fanfare();
 }
 wrap.addEventListener("pointerdown", (e) => {
   e.preventDefault();
-  keyMode = false;
   var p = gameView.point(canvas, e, W, H);
   down(p.x, p.y);
 });
@@ -186,7 +208,6 @@ window.addEventListener("keydown", (e) => {
   var go = e.code === "Space" || e.key === " " || e.key === "Enter";
   if (!esc && !go) return;
   e.preventDefault();
-  if (!esc) keyMode = true;
   if (esc) {
     if (!e.repeat) newRound();
     return;
@@ -194,7 +215,7 @@ window.addEventListener("keydown", (e) => {
   if (e.repeat) return;
   down();
 });
-window.addEventListener("keyup", function(e) {
+window.addEventListener("keyup", function (e) {
   if (e.code === "Space" || e.key === " " || e.key === "Enter") {
     if (state === S.INTRO) startButton.click();
     else up();
@@ -226,6 +247,10 @@ function draw() {
         near: state === S.INTRO ? 0 : near,
         angry: angry,
         rag: state === S.ANGRY || (state === S.RESULT && failed),
+        fight: state === S.FIGHT,
+        fightTime: T2,
+        police: (state === S.POLICE && isFight) ? Math.min(1, T2 / 1.6) : (state === S.RESULT && isFight ? 1 : 0),
+        policeTime: T2,
         W: W,
         H: H
       });
@@ -273,10 +298,9 @@ function draw() {
     ctx.fillText(txt, cx, cy + R + 13);
   }
   /* 吹き出し */
-  bubbles.forEach(function(b) {
+  bubbles.forEach(function (b) {
     if (T < b.from || state === S.RESULT || noUI) return;
-    var txt = lang.t(b.ja, b.en, b.ko, b.zh, b.tw),
-      mad = b.ja === "ちょっと！";
+    var txt = lang.t(b.ja, b.en, b.ko, b.zh, b.tw), mad = b.ja === "ちょっと！";
     ctx.font = (mad ? "900 44px" : "800 32px") + " sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
@@ -293,7 +317,7 @@ function draw() {
 
 function resultLayout() {
   return ResultActions.showcase(W, H, {
-    sizes: denied ? [80] : failed ? [58] : [104, 50]
+    sizes: denied ? (isFight ? [48, 80] : [80]) : failed ? [58] : [104, 50]
   });
 }
 
@@ -301,15 +325,22 @@ function resultButtons() {
   return resultLayout().buttons;
 }
 
+function getRows() {
+  if (isFight) return [lang.t("ゲームオーバー", "Game over", "게임 오버", "游戏结束", "遊戲結束"), lang.t("逮捕された", "Arrested", "체포됨", "被逮捕", "被逮捕")];
+  if (denied) return [lang.t("だめでした", "Denied", "안 됐습니다", "被拒绝了", "被拒絕了")];
+  if (failed) return [lang.t("後ろの人を倒した", "Knocked out the person behind", "뒷사람을 쓰러뜨렸다", "把后面的人放倒了", "把後面的人放倒了")];
+  return [score.toFixed(2) + "mm", lang.t("まで倒した", "left", "까지 젖혔다", "剩余", "剩餘")];
+}
+
 function drawResult() {
   var L = resultLayout();
-  var rows = denied ? [lang.t("だめでした", "Denied", "안 됐습니다", "被拒绝了", "被拒絕了")] : failed ? [lang.t("後ろの人を倒した", "Knocked out the person behind", "뒷사람을 쓰러뜨렸다", "把后面的人放倒了", "把後面的人放倒了")] : [score.toFixed(2) + "mm", lang.t("まで倒した", "left", "까지 젖혔다", "剩余", "剩餘")];
+  var rows = getRows();
   ctx.save();
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
   ctx.lineJoin = "round";
   ctx.strokeStyle = "#16202e";
-  rows.forEach(function(t, i) {
+  rows.forEach(function (t, i) {
     var sz = L.lines[i].size;
     ctx.font = "900 " + sz + "px sans-serif";
     while (ctx.measureText(t).width > W - 30 && sz > 20) {
@@ -326,9 +357,7 @@ function drawResult() {
 }
 var startButton = document.getElementById("start");
 zStartTap(() => state === S.INTRO, () => startButton.click());
-["pointerdown", "pointerup"].forEach(function(name) {
-  startButton.addEventListener(name, (e) => e.stopPropagation());
-});
+["pointerdown", "pointerup"].forEach((name) => startButton.addEventListener(name, (e) => e.stopPropagation()));
 startButton.addEventListener("click", (e) => {
   e.stopPropagation();
   sfx.unlock();
