@@ -4,12 +4,13 @@ import Sfx from './js/sfx.js';
 import Lang from './js/lang.js';
 import Z3 from "./js/Z3.js";
 import { Scene3D, zRecline } from "./js/scene3d.js";
-import ResultActions from './js/result-actions.js'
+import ResultActions from './js/result.js'
 
 const lang = Lang.install();
 var canvas = document.getElementById("c");
 var ctx = canvas.getContext("2d");
 var wrap = document.getElementById("wrap");
+var crashButton = document.getElementById("crash");
 var W = 540, H = 960;
 
 const rngChance = (probability = 0.5) => Math.random() < probability;
@@ -21,6 +22,7 @@ function layout() {
 }
 window.addEventListener("resize", layout);
 window.addEventListener("orientationchange", layout);
+
 /* ============ 音 ============ */
 const sfx = new Sfx();
 wrap.addEventListener("touchstart", () => sfx.unlock(), { passive: true });
@@ -48,6 +50,7 @@ var S = {
   INTRO: "intro",
   ASK: "ask",
   PLAY: "play",
+  CRASH: "crash",
   ANGRY: "angry",
   FIGHT: "fight",
   POLICE: "police",
@@ -59,11 +62,12 @@ var SPEED = 8; /* 倒れる速さ（度/秒） */
 var D2R = Math.PI / 180;
 var angle, contact, lean, gap, hitInfo, creakT = 0;
 var noUI = false;
-var failed, denied;
+var failed, denied, crashed = false;
 var isFight = false;
 
 function newRound() {
   document.getElementById("start").hidden = true;
+  if (Z3.mobile) crashButton.hidden = false;
   state = S.ASK;
   score = 0;
   T = 0;
@@ -71,6 +75,7 @@ function newRound() {
   held = false;
   angle = 0;
   failed = false;
+  crashed = false;
   gap = null;
   lean = -0.18; /* 後ろの人は背もたれに頭をつけてもたれる（触れるのは約30.7°）*/
   contact = 0;
@@ -105,34 +110,40 @@ function update(dt) {
   T += dt;
   bubbles = bubbles.filter((b) => T < b.until);
   gap = gapNow(angle);
-  if (state === S.ASK) {
-    if (denied ? T > 3.2 : T > 2.4) {
-      if (denied) {
-        if (isFight) {
-          state = S.FIGHT;
-          T2 = 0;
-        } else toResult();
-      } else state = S.PLAY;
-    }
-    return;
-  }
-  if (state === S.FIGHT) {
-    T2 += dt;
-    if (T2 > 2) {
-      state = S.POLICE;
-      T2 = 0;
-    }
-    return;
-  }
-  if (state === S.POLICE) {
-    T2 += dt;
-    if (T2 > 2.5) toResult();
-    return;
-  }
-  if (state === S.ANGRY) {
-    T2 += dt;
-    if (T2 > 2.6) toResult();
-    return;
+  switch (state) {
+    case S.CRASH:
+      T2 += dt;
+      if (T2 >= 2) toResult();
+      break;
+
+    case S.ASK:
+      if (denied ? T > 3.2 : T > 2.4) {
+        if (denied) {
+          if (isFight) {
+            state = S.FIGHT;
+            T2 = 0;
+          } else toResult();
+        } else state = S.PLAY;
+      }
+      break;
+
+    case S.FIGHT:
+      T2 += dt;
+      if (T2 > 2) {
+        state = S.POLICE;
+        T2 = 0;
+      }
+      break;
+  
+    case S.POLICE:
+      T2 += dt;
+      if (T2 > 2.5) toResult();
+      break;
+
+    case S.ANGRY:
+      T2 += dt;
+      if (T2 > 2.6) toResult();
+      break;
   }
   if (state !== S.PLAY) return;
   /* 押している間、なめらかに倒れる */
@@ -148,6 +159,21 @@ function update(dt) {
   if (gap <= 0) bump();
 }
 
+function triggerCrash() {
+  if (state === S.CRASH || state === S.RESULT) return;
+  sfx.unlock();
+  sfx.resume();
+  state = S.CRASH;
+  if (Z3.mobile) crashButton.hidden = true;
+  T2 = 0;
+  crashed = true;
+  failed = true;
+  held = false;
+  bubbles = [];
+  say("me", "あー！", "あー！", "AH!", { pitch: 180, ko: "아!", zh: "啊！", tw: "啊！" });
+  sfx.noiseHit(0.55, 1100, 0.8, 0.55);
+}
+
 function bump() {
   state = S.ANGRY;
   T2 = 0;
@@ -160,6 +186,7 @@ var T2 = 0;
 
 function toResult() {
   state = S.RESULT;
+  if (Z3.mobile) crashButton.hidden = true;
   score = failed ? 0 : Math.round(gap * 100000) / 100;
 }
 /* ============ 入力 ============ */
@@ -204,8 +231,14 @@ wrap.addEventListener("pointercancel", () => up());
 window.addEventListener("blur", () => up());
 
 window.addEventListener("keydown", (e) => {
-  var esc = e.key === "Escape";
-  var go = e.code === "Space" || e.key === " " || e.key === "Enter";
+  if (e.key.toLowerCase() === "e") {
+    e.preventDefault();
+    if (!e.repeat) triggerCrash();
+    return;
+  }
+
+  const esc = e.key === "Escape";
+  const go = e.code === "Space" || e.key === " " || e.key === "Enter";
   if (!esc && !go) return;
   e.preventDefault();
   if (esc) {
@@ -231,6 +264,44 @@ function rr(x, y, w, h, r) {
   ctx.arcTo(x, y, x + w, y, r);
   ctx.closePath();
 }
+
+function drawCrashExplosion() {
+  const t = Math.max(0, Math.min(2, T2));
+  const grow = Math.min(1, t / 0.85);
+  const fade = Math.max(0, 1 - Math.max(0, t - 0.7) / 1.3);
+  const cx = W * 0.52, cy = H * 0.39;
+  const radius = W * (0.12 + grow * 0.7);
+  ctx.save();
+  ctx.globalCompositeOperation = "screen";
+  const glow = ctx.createRadialGradient(cx, cy, 2, cx, cy, radius);
+  glow.addColorStop(0, "rgba(255,255,220," + (0.96 * fade) + ")");
+  glow.addColorStop(0.16, "rgba(255,220,70," + (0.88 * fade) + ")");
+  glow.addColorStop(0.43, "rgba(255,92,18," + (0.64 * fade) + ")");
+  glow.addColorStop(0.76, "rgba(216,31,12," + (0.25 * fade) + ")");
+  glow.addColorStop(1, "rgba(170,20,8,0)");
+  ctx.fillStyle = glow;
+  ctx.fillRect(cx - radius, cy - radius, radius * 2, radius * 2);
+  ctx.globalCompositeOperation = "source-over";
+  ctx.globalAlpha = fade * (1 - grow * 0.35);
+  ctx.strokeStyle = "#fff2a1";
+  ctx.lineWidth = 10 * (1 - grow * 0.55);
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius * 1.12, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.globalAlpha = fade;
+  for (let i = 0; i < 20; i++) {
+    const a = i * 2.39996 + 0.4;
+    const reach = radius * (0.72 + (i % 5) * 0.075);
+    const x = cx + Math.cos(a) * reach, y = cy + Math.sin(a) * reach;
+    ctx.strokeStyle = i % 3 ? "#ffb331" : "#fff2ac";
+    ctx.lineWidth = 2 + (i % 4);
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + Math.cos(a) * (12 + (i % 4) * 7), y + Math.sin(a) * (12 + (i % 4) * 7));
+    ctx.stroke();
+  }
+  ctx.restore();
+}
 var scene3d = Z3 ? Z3.lazy(() => new Scene3D()) : () => null;
 var angry = 0;
 
@@ -247,6 +318,8 @@ function draw() {
         near: state === S.INTRO ? 0 : near,
         angry: angry,
         rag: state === S.ANGRY || (state === S.RESULT && failed),
+        crash: crashed,
+        crashTime: T2,
         fight: state === S.FIGHT,
         fightTime: T2,
         police: (state === S.POLICE && isFight) ? Math.min(1, T2 / 1.6) : (state === S.RESULT && isFight ? 1 : 0),
@@ -261,6 +334,7 @@ function draw() {
     ctx.fillStyle = "#d9d4c6";
     ctx.fillRect(0, 0, W, H);
   }
+  if (state === S.CRASH) drawCrashExplosion();
   /* すき間が近いときの拡大鏡（当たりそうな所を5倍に） */
   if (drew && hitInfo && g < 0.06 && !failed && !noUI && state !== S.ANGRY && state !== S.INTRO && state !== S.RESULT) {
     var hi = hitInfo, k = canvas.width / W, mag = Math.max(5, Math.min(30, 0.03 / Math.max(0.001, g))), R = 100;
@@ -316,9 +390,7 @@ function draw() {
 }
 
 function resultLayout() {
-  return ResultActions.showcase(W, H, {
-    sizes: denied ? (isFight ? [48, 80] : [80]) : failed ? [58] : [104, 50]
-  });
+  return ResultActions.showcase(W, H, { sizes: crashed ? [84, 58] : denied ? (isFight ? [48, 80] : [80]) : failed ? [58] : [104, 50] });
 }
 
 function resultButtons() {
@@ -326,6 +398,7 @@ function resultButtons() {
 }
 
 function getRows() {
+  if (crashed) return [lang.t("ゲームオーバー", "Game over", "게임 오버", "游戏结束", "遊戲結束"), lang.t("列車事故", "Train crash", "열차 충돌", "列车事故", "列車事故")];
   if (isFight) return [lang.t("ゲームオーバー", "Game over", "게임 오버", "游戏结束", "遊戲結束"), lang.t("逮捕された", "Arrested", "체포됨", "被逮捕", "被逮捕")];
   if (denied) return [lang.t("だめでした", "Denied", "안 됐습니다", "被拒绝了", "被拒絕了")];
   if (failed) return [lang.t("後ろの人を倒した", "Knocked out the person behind", "뒷사람을 쓰러뜨렸다", "把后面的人放倒了", "把後面的人放倒了")];
@@ -340,7 +413,7 @@ function drawResult() {
   ctx.textBaseline = "top";
   ctx.lineJoin = "round";
   ctx.strokeStyle = "#16202e";
-  rows.forEach(function (t, i) {
+  rows.forEach((t, i) => {
     var sz = L.lines[i].size;
     ctx.font = "900 " + sz + "px sans-serif";
     while (ctx.measureText(t).width > W - 30 && sz > 20) {
@@ -355,6 +428,15 @@ function drawResult() {
   ctx.restore();
   ResultActions.drawButtons(ctx, resultButtons());
 }
+
+if (Z3.mobile) {
+  ["pointerdown", "pointerup", "pointercancel"].forEach((name) => crashButton.addEventListener(name, (e) => e.stopPropagation()));
+  crashButton.addEventListener("click", (e) => {
+    e.stopPropagation();
+    triggerCrash();
+  });
+}
+
 var startButton = document.getElementById("start");
 zStartTap(() => state === S.INTRO, () => startButton.click());
 ["pointerdown", "pointerup"].forEach((name) => startButton.addEventListener(name, (e) => e.stopPropagation()));

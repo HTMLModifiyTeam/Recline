@@ -20,6 +20,7 @@ class Finish {
     this.o = o === true ? {} : o;
     this.failed = false;
   }
+
   size(w, h) {
     if (this.failed) return;
   
@@ -29,10 +30,7 @@ class Finish {
         this.rt.setSize(w, h);
         this.mat.uniforms.uRes.value.set(w, h); return;
       }
-      this.rt = new THREE.WebGLRenderTarget(w, h, {
-        type: THREE.HalfFloatType,
-        samples: Z3.mobile ? 0 : 4
-      });
+      this.rt = new THREE.WebGLRenderTarget(w, h);
       this.mat = new THREE.ShaderMaterial({
         uniforms: {
           tColor: { value: this.rt.texture }, uRes: { value: new THREE.Vector2(w, h) }, uTime: { value: 0 },
@@ -114,6 +112,7 @@ const Z3 = {
       var dpr = Z3.dpr(this.maxDpr), w = Math.round(W * dpr), h = Math.round(H * dpr);
       if (!(w >= 2 && h >= 2)) return false; /* 画面の大きさが決まる前（0や数でない）は描かない */
       if (w !== this.w || h !== this.h) {
+        this.renderer.setPixelRatio(dpr);
         this.renderer.setSize(w, h, false);
         this.w = w; this.h = h;
         if (this.camera.isPerspectiveCamera) {
@@ -124,6 +123,7 @@ const Z3 = {
       }
       if (this.finish) this.finish.render(this.scene, this.camera);
       else this.renderer.render(this.scene, this.camera);
+      ctx.imageSmoothingEnabled = false;
       ctx.drawImage(this.renderer.domElement, 0, 0, W, H);
       return true;
     }

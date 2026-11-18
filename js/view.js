@@ -12,7 +12,7 @@ export default {
   fit: function (canvas, wrap, ctx, width, height, view) {
     var scale = Math.min(view.width / width, view.height / height);
     var dpr = Math.min(window.devicePixelRatio || 1, 2);
-    if (window !== window.top || /^(localhost|127\.0\.0\.1)$/.test(location.hostname) || /shisaku-/.test(location.pathname))
+    if (window !== window.top || /^(localhost|127\.0\.0\.1)$/.test(location.hostname))
       dpr = Math.max(dpr, 1080 / (width * scale));
     wrap.style.width = canvas.style.width = Math.round(width * scale) + "px";
     wrap.style.height = canvas.style.height = Math.round(height * scale) + "px";

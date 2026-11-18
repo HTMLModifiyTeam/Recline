@@ -86,8 +86,7 @@ export default class Lang {
     }
 
     if (this.lang === "en") {
-      if (doc.readyState === "loading")
-        doc.addEventListener("DOMContentLoaded", () => this.translateLabels());
+      if (doc.readyState === "loading") doc.addEventListener("DOMContentLoaded", () => this.translateLabels());
       else this.translateLabels();
     }
   }

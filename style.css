@@ -6,9 +6,7 @@ html, body {
   overscroll-behavior: none;
 }
 
-* {
-  -webkit-tap-highlight-color: transparent;
-}
+* { -webkit-tap-highlight-color: transparent; }
 
 #stage {
   width: 100%;
@@ -28,6 +26,8 @@ html, body {
 canvas {
   display: block;
   background: #1d1714;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
 }
 
 #stage, #wrap, canvas {
@@ -50,7 +50,22 @@ canvas {
   font: bold 28px sans-serif;
   touch-action: manipulation;
 }
+#start[hidden] { display: none; }
 
-#start[hidden] {
-  display: none;
+#crash {
+  position: absolute;
+  left: 50%;
+  bottom: 3%;
+  transform: translateX(-50%);
+  width: 240px;
+  height: 68px;
+  border: 3px solid rgba(255,255,255,.85);
+  border-radius: 34px;
+  background: #e23b38;
+  color: #fff;
+  font: 900 24px sans-serif;
+  letter-spacing: .08em;
+  box-shadow: 0 5px 0 #902421, 0 10px 24px rgba(0,0,0,.3);
+  touch-action: manipulation;
 }
+#crash[hidden] { display: none; }

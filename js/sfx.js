@@ -29,6 +29,7 @@ export default class Sfx {
       this.resume();
       return;
     }
+  
     const C = window.AudioContext || window.webkitAudioContext;
     if (!C) return;
     try {
@@ -163,13 +164,7 @@ export default class Sfx {
   fanfare() {
     const ac = this.ac;
     if (!ac) return;
-    const n = ac.currentTime + 0.15,
-      C = 523.25,
-      E = 659.25,
-      G = 783.99,
-      C2 = 1046.5,
-      A = 880,
-      B = 987.77;
+    const n = ac.currentTime + 0.15, C = 523.25, E = 659.25, G = 783.99, C2 = 1046.5, A = 880, B = 987.77;
     [[G, 0, 0.1], [G, 0.12, 0.1], [G, 0.24, 0.1], [C2, 0.36, 0.5], [A, 0.9, 0.16], [B, 1.08, 0.16], [C2, 1.26, 0.9]].forEach((t) => this.beep(t[0], n + t[1], t[2] + 0.1, 0.12, "square"));
     [C / 2, E / 2, G / 2].forEach((f) => this.beep(f, n + 1.26, 1.0, 0.06, "triangle"));
   }

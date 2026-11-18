@@ -80,7 +80,7 @@ export class Scene3D {
     this.part(sc, "box", wallC, -0.4, 2.0, -0.75, 7, 1.2, 0.04).receiveShadow = true;
     this.part(sc, "box", "#c9c4b6", -0.4, 0.77, -0.72, 7, 0.04, 0.08);
     this.part(sc, "box", "#c9c4b6", -0.4, 1.4, -0.72, 7, 0.04, 0.06);
-    [-2.5, -1.45, -0.4, 0.65, 1.7].forEach(function (x) { self.part(sc, "box", wallC, x, 1.08, -0.75, 0.12, 0.66, 0.05); });
+    [-2.5, -1.45, -0.4, 0.65, 1.7].forEach((x) => self.part(sc, "box", wallC, x, 1.08, -0.75, 0.12, 0.66, 0.05));
     /* 窓の外の景色（流れる） */
     this.sceneryTex = Z3.canvasTex(1024, 256, function (g, w, h) {
       var sky = g.createLinearGradient(0, 0, 0, h);
@@ -110,8 +110,10 @@ export class Scene3D {
     this.phone = this.part(sc, "box", "#1d1f24", 0, 0, 0, 0.075, 0.008, 0.14);
     this.phoneScreen = this.part(sc, "box", "#9fd8ff", 0, 0, 0, 0.06, 0.002, 0.12, { emissive: "#6fb8ef", emissiveIntensity: 0.6 });
 
+    this.rags = [];
     this.t = 0;
   }
+
   mat(color, opt) {
     var key = color + JSON.stringify(opt || {});
     if (!this.mats[key]) {
@@ -121,6 +123,7 @@ export class Scene3D {
     }
     return this.mats[key];
   }
+
   part(parent, kind, color, x, y, z, sx, sy, sz, opt) {
     var m = new THREE.Mesh(this.geo[kind], typeof color === "string" ? this.mat(color, opt) : color);
     m.position.set(x, y, z); m.scale.set(sx, sy, sz);
@@ -128,6 +131,7 @@ export class Scene3D {
     parent.add(m);
     return m;
   }
+
   /* 太さのある棒を a から b へ渡す（a, b は {x, y, z}） */
   segment(mesh, a, b) {
     var from = new THREE.Vector3(a.x, a.y, a.z || 0), to = new THREE.Vector3(b.x, b.y, b.z || 0);
@@ -136,6 +140,7 @@ export class Scene3D {
     mesh.scale.y = Math.max(0.001, len);
     mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.normalize());
   }
+  
   /* 座席。背もたれのまとまりを返す（軸で回す） */
   seat(x) {
     var sc = this.scene, blue = "#2f4f86", self = this;
@@ -219,17 +224,23 @@ export class Scene3D {
   sync(s) {
     const dt = Math.max(0, Math.min(0.1, s.t - this.t));
     this.t = s.t;
-    this.sceneryTex.offset.x = (this.sceneryTex.offset.x + dt * 0.35) % 1;
+    if (!s.crash) this.sceneryTex.offset.x = (this.sceneryTex.offset.x + dt * 0.35) % 1;
     this.myBack.rotation.z = s.angle;
 
     const scuffle = !!(s.fight || s.police);
     if (scuffle) this.poseFight(s);
     else this.poseMe(s.angle);
 
-    if (s.rag && !this.rag) this.ragStart();
-    if (!s.rag && this.rag) this.ragReset();
+    if (s.crash) {
+      if (!this.rags.some((R) => R.person === this.him)) this.ragStart(this.him, [-2.2, 2.1, 1.8], true);
+      if (!this.rags.some((R) => R.person === this.me)) this.ragStart(this.me, [2.2, 2.0, 1.6], false);
+    } else if (s.rag && this.rags.length === 0) {
+      this.ragStart(this.him, [-1.6, 1.2, 1.6], true);
+    } else if (!s.rag && !s.crash && this.rags.length) {
+      this.ragReset();
+    }
 
-    if (this.rag) this.stepRag(dt);
+    if (this.rags.length) this.stepRag(dt);
     else if (scuffle) this.poseArrest(s);
     else this.poseSeated(s);
 
@@ -307,14 +318,15 @@ export class Scene3D {
   }
   /* ラグドールを進めて、体の部品に写す */
   stepRag(dt) {
-    const R = this.rag;
-    R.world.step(1 / 60, dt, 4);
-    R.parts.forEach((o) => {
-      o.g.position.set(o.b.position.x, o.b.position.y, o.b.position.z);
-      o.g.quaternion.set(o.b.quaternion.x, o.b.quaternion.y, o.b.quaternion.z, o.b.quaternion.w);
+    this.rags.forEach((R) => {
+      R.world.step(1 / 60, dt, 4);
+      R.parts.forEach((o) => {
+        o.g.position.set(o.b.position.x, o.b.position.y, o.b.position.z);
+        o.g.quaternion.set(o.b.quaternion.x, o.b.quaternion.y, o.b.quaternion.z, o.b.quaternion.w);
+      });
+      const na = R.torso.pointToWorldFrame(R.nkA), hp = R.head.position;
+      this.segment(R.person.neck, { x: na.x, y: na.y, z: na.z }, { x: hp.x, y: hp.y, z: hp.z });
     });
-    const na = R.torso.pointToWorldFrame(R.nkA), hp = R.head.position;
-    this.segment(this.him.neck, { x: na.x, y: na.y, z: na.z }, { x: hp.x, y: hp.y, z: hp.z });
     this.him.faceMat.emissiveIntensity = 0.8;
   }
   /* カメラ：真横から遠近なし（見た目と当たりを一致させる）。横1.75mを写し、縦長の画面では上下が広がる */
@@ -322,15 +334,19 @@ export class Scene3D {
     const vw = 1.75, vh = vw * s.H / s.W, cx = -0.4, cy = 0.95, cam = this.camera;
     cam.left = -vw / 2; cam.right = vw / 2; cam.top = vh / 2; cam.bottom = -vh / 2;
     cam.updateProjectionMatrix();
-    cam.position.set(cx, cy, 6);
-    cam.lookAt(cx, cy, 0);
+    const shake = s.crash ? 0.012 + 0.035 * Math.exp(-Math.max(0, s.crashTime || 0) * 0.8) : 0;
+    const sx = Math.sin((s.crashTime || 0) * 52) * shake;
+    const sy = Math.cos((s.crashTime || 0) * 43) * shake * 0.75;
+    cam.position.set(cx + sx, cy + sy, 6);
+    cam.lookAt(cx + sx, cy + sy, 0);
   }
   /* ============ ぶつかったらラグドール（アツアツ一輪車と同じ作り。cannon.js） ============
        後ろの人を頭・胴・太もも・すね・上腕・前腕に分けて、関節でつないだ物理の体にする。
        ぶつかり分け：床・座席1 / 体2（体どうしはぶつけない） */
-  ragStart() {
-    var C = CANNON, self = this, p = this.him, q = p.q;
+  ragStart(p, push, includePhone) {
+    var C = CANNON, self = this, q = p && p.q;
     if (!C || !q) return;
+    push = push || [-1.6, 1.2, 1.6];
     var world = new C.World({ gravity: new C.Vec3(0, -9.8, 0) });
     world.broadphase = new C.NaiveBroadphase();
     world.solver.iterations = 15;
@@ -381,8 +397,7 @@ export class Scene3D {
       var c = new C.Vec3(pt.x, pt.y, z || 0);
       world.addConstraint(new C.PointToPointConstraint(b1, b1.pointToLocalFrame(c), b2, b2.pointToLocalFrame(c)));
     }
-    /* はね飛ばされる勢い：頭は後ろ上へ、体は通路（手前）へ */
-    var push = [-1.6, 1.2, 1.6];
+    /* Crash momentum carries each person away from their seat. */
     var mid = { x: (q.hip.x + q.sh.x) / 2, y: (q.hip.y + q.sh.y) / 2 };
     var tq = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, p.torso.rotation.z));
     var torso = part([p.hips, p.torso], V(mid), tq, new C.Box(new C.Vec3(0.15, 0.27, 0.15)), 30, [push[0] * 0.5, push[1] * 0.6, push[2]]);
@@ -400,21 +415,24 @@ export class Scene3D {
     var sh = limb([p.shin, p.foot], q.knee, q.foot, 0.045, 4, [0.3, 0.2, push[2] * 0.5], 0.12, 0.12);
     joint(torso, th, q.hip, 0.12); joint(th, sh, q.knee, 0.12);
     var up = limb([p.upper, p.elbow], q.sh, q.elbow, 0.045, 2.5, [push[0] * 0.4, push[1], push[2]], 0.17, 0.18);
-    var fo = limb([p.fore, p.hand, this.phone, this.phoneScreen], q.elbow, q.hand, 0.04, 2, [0.5, 2, push[2]], 0.18, 0.14);
+    var foreMeshes = [p.fore, p.hand];
+    if (includePhone) foreMeshes.push(this.phone, this.phoneScreen);
+    var fo = limb(foreMeshes, q.elbow, q.hand, 0.04, 2, [push[0] * 0.3, push[1], push[2]], 0.18, 0.14);
     joint(torso, up, q.sh, 0.17); joint(up, fo, q.elbow, 0.18);
     /* 首：胴の肩の点と頭の中心を毎フレーム棒でつなぐ（頭が取れて見えないように） */
     var nkA = torso.pointToLocalFrame(new C.Vec3(q.sh.x, q.sh.y, 0));
-    this.rag = { world: world, parts: parts, moved: moved, torso: torso, head: head, nkA: nkA };
+    this.rags.push({ world: world, parts: parts, moved: moved, torso: torso, head: head, nkA: nkA, person: p });
   }
   ragReset() {
     var self = this;
-    if (!this.rag) return;
-    this.rag.moved.forEach(function (o) {
-      o.parent.add(o.m);
-      o.m.position.copy(o.p); o.m.quaternion.copy(o.q); o.m.scale.copy(o.s);
+    this.rags.forEach((R) => {
+      R.moved.forEach((o) => {
+        o.parent.add(o.m);
+        o.m.position.copy(o.p); o.m.quaternion.copy(o.q); o.m.scale.copy(o.s);
+      });
+      R.parts.forEach((o) => self.scene.remove(o.g));
     });
-    this.rag.parts.forEach(function (o) { self.scene.remove(o.g); });
-    this.rag = null;
+    this.rags = [];
   }
   /* 場面の点（x, y, z=0）を画面の座標へ */
   project(p, W, H) {
